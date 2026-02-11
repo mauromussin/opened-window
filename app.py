@@ -3,103 +3,112 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE PAGINA ---
-st.set_page_config(page_title="Wave Physics Lab: Aperture Diffraction", layout="wide")
+st.set_page_config(page_title="Wave Physics Lab: FDTD Beamsteering", layout="wide")
 
-tab1, tab2 = st.tabs(["🎯 Modello Analitico (Diffrazione)", "🌊 Simulatore Numerico (FDTD)"])
+tab1, tab2 = st.tabs(["🎯 Modello Analitico", "🌊 Simulatore Onde 2D (FDTD)"])
 
-# --- TAB 1: MODELLO ANALITICO FISICO ---
+# --- TAB 1: MODELLO ANALITICO (Fisica Pura) ---
 with tab1:
-    st.title("Fisica della Diffrazione e Direttività")
+    st.title("Analisi della Direttività e Diffrazione")
     
-    # Equalizzatore Potenza Sonora
-    st.subheader("1. Spettro Sorgente (Lw)")
+    # Input principali
     freqs = np.array([100, 125, 250, 500, 1000, 2000, 4000, 5000])
     wA = np.array([-19.1, -16.1, -8.6, -3.2, 0, 1.2, 1.0, 0.5]) 
-    default_lw = [106, 105, 102, 100, 98, 95, 90, 88]
     
-    cols_lw = st.columns(len(freqs))
-    lw_inputs = [cols_lw[i].slider(f"{freqs[i]}Hz", 50, 110, default_lw[i]) for i in range(len(freqs))]
-    lw_octave = np.array(lw_inputs)
+    col_inp1, col_inp2 = st.columns([1, 1])
+    with col_inp1:
+        s = st.slider("Spessore Mazzetta (s) [m]", 0.0, 0.6, 0.2)
+        w_width = st.slider("Larghezza Finestra [m]", 0.5, 2.0, 1.0)
+    with col_inp2:
+        d_mic = st.slider("Distanza Ricevitore P' [m]", 0.5, 5.0, 2.0)
+        f_target = st.select_slider("Frequenza Analisi Polare [Hz]", options=freqs, value=1000)
 
-    # Parametri Geometrici
-    st.sidebar.header("Parametri Fisici")
-    s = st.sidebar.slider("Spessore Mazzetta (s) [m]", 0.0, 0.6, 0.2)
-    w_width = st.sidebar.slider("Larghezza Apertura [m]", 0.5, 2.0, 1.0)
-    d_src = st.sidebar.slider("Distanza Sorgente [m]", 2, 50, 15)
-    d_mic = st.sidebar.slider("Distanza Ricevitore Interno [m]", 0.5, 5.0, 2.0)
-
-    # Motore di Calcolo Fisico
     def calculate_physics(theta_deg):
         theta = np.radians(theta_deg)
         k = 2 * np.pi * freqs / 343
+        lp_inc = 100 # Riferimento
         
-        # 1. Propagazione Esterna (Campo Libero)
-        lp_incidente = lw_octave - 20*np.log10(d_src) - 11
-        
-        # 2. Diffrazione della Mazzetta (Maekawa)
+        # Diffrazione Mazzetta
         delta = s * (1 - np.cos(theta))
         N = 2 * delta * freqs / 343
         att_diff = np.where(N > 0, 10 * np.log10(3 + 20*N), 0)
         
-        # 3. Direttività dell'Apertura (Modello Sinc)
+        # Direttività (Sinc)
         psi = (k * w_width / 2) * np.sin(theta)
         dir_factor = (np.sinc(psi / np.pi))**2
         
-        # 4. Livello Interno (Pressione puntuale)
-        # i_int proporzionale alla potenza incidente, direttività e divergenza interna
-        i_int = (np.cos(theta) * dir_factor) / (2 * np.pi * d_mic**2)
-        lp_int = 10 * np.log10(i_int + 1e-12) + lp_incidente - att_diff
-        
-        # Totali dBA
-        ext_dba = 10 * np.log10(np.sum(10**((lp_incidente + wA)/10)))
-        int_dba = 10 * np.log10(np.sum(10**((lp_int + wA)/10)))
-        return ext_dba - int_dba, att_diff.mean()
+        lp_int = 10 * np.log10(dir_factor * np.cos(theta) / (2*np.pi*d_mic**2) + 1e-12) + lp_inc - att_diff
+        return lp_inc - lp_int
 
-    # Plot Polare
     angles = np.linspace(0, 89, 90)
-    results = np.array([calculate_physics(a) for a in angles])
+    att_vals = [calculate_physics(a).mean() for a in angles]
     
-    fig_pol, ax_pol = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(7,7))
-    ax_pol.plot(np.radians(angles), results[:, 0], lw=3, label="Attenuazione Totale [dB]")
-    ax_pol.fill_between(np.radians(angles), 0, results[:, 1], color='g', alpha=0.2, label="Contributo Mazzetta")
+    fig_pol, ax_pol = plt.subplots(subplot_kw={'projection': 'polar'})
+    ax_pol.plot(np.radians(angles), att_vals, lw=3, color='royalblue')
     ax_pol.set_theta_zero_location("N")
     ax_pol.set_theta_direction(-1)
     ax_pol.set_thetamin(0)
     ax_pol.set_thetamax(90)
-    ax_pol.legend()
+    ax_pol.set_title("Attenuazione Totale [dB]", va='bottom')
     st.pyplot(fig_pol)
 
-# --- TAB 2: SIMULATORE NUMERICO FDTD ---
+# --- TAB 2: SIMULATORE FDTD CON ANGOLO DI INCIDENZA ---
 with tab2:
-    st.title("Simulatore Time-Domain (FDTD)")
-    st.write("Risoluzione numerica dell'equazione delle onde $\\nabla^2 p - \\frac{1}{c^2}\\frac{\\partial^2 p}{\\partial t^2} = 0$.")
+    st.title("Simulazione Numerica con Incidenza Angolare")
+    st.write("Modellazione di un fronte d'onda piano inclinato che attraversa l'apertura.")
+
+    col_sim_1, col_sim_2 = st.columns([1, 3])
     
-    c_sim = st.button("🚀 Avvia Calcolo Numerico")
-    
-    if c_sim:
-        # Griglia e parametri
-        nx, ny = 100, 70
-        p, p_prev = np.zeros((nx, ny)), np.zeros((nx, ny))
+    with col_sim_1:
+        angle_inc = st.slider("Angolo di Incidenza Sorgente (°)", 0, 75, 30)
+        freq_fdtd = st.slider("Frequenza (Adimensionale)", 0.1, 1.0, 0.4)
+        wall_thick = st.slider("Spessore Muro (px)", 2, 12, 6)
+        run_sim = st.button("▶️ Esegui Simulazione FDTD")
+
+    if run_sim:
+        # Griglia e setup
+        nx, ny = 140, 100
+        p = np.zeros((nx, ny))
+        p_prev = np.zeros((nx, ny))
         mask = np.ones((nx, ny))
-        # Disegno muro
-        wall_x, thick_px, gap_px = 35, 6, 12
-        mask[wall_x : wall_x+thick_px, : ny//2 - gap_px//2] = 0
-        mask[wall_x : wall_x+thick_px, ny//2 + gap_px//2 :] = 0
         
-        disp = st.empty()
-        for t in range(150):
-            # Sorgente pulsata
-            p[5, ny//2] += np.sin(0.5 * t) * np.exp(-0.01 * (t-40)**2)
+        # Geometria muro
+        wx = 50 # Posizione muro
+        gap = 16 # Apertura
+        mask[wx : wx + wall_thick, : ny//2 - gap//2] = 0
+        mask[wx : wx + wall_thick, ny//2 + gap//2 :] = 0
+        
+        plot_cont = st.empty()
+        theta_rad = np.radians(angle_inc)
+        
+        for t in range(180):
+            # SORGENTE PLANARE INCLINATA
+            # Usiamo una linea di sorgenti lungo x=5 con ritardo di fase basato sull'angolo
+            for y_idx in range(ny):
+                # Il ritardo dipende dalla posizione y per creare l'inclinazione del fronte
+                delay = y_idx * np.sin(theta_rad)
+                p[5, y_idx] += np.sin(freq_fdtd * (t - delay)) * np.exp(-0.02 * (t - 40 - delay)**2)
             
-            # Update FDTD
-            p_next = 2*p - p_prev + 0.25 * (np.roll(p,1,0)+np.roll(p,-1,0)+np.roll(p,1,1)+np.roll(p,-1,1)-4*p)
-            p_next *= mask # Parete rigida
+            # Motore FDTD (Laplaciano)
+            p_next = 2*p - p_prev + 0.25 * (
+                np.roll(p, 1, 0) + np.roll(p, -1, 0) +
+                np.roll(p, 1, 1) + np.roll(p, -1, 1) - 4*p
+            )
+            
+            # Condizioni al contorno (Smorzamento)
+            p_next *= mask
+            p_next[0,:] = p_next[-1,:] = p_next[:,0] = p_next[:,-1] = 0
+            
             p_prev, p = p, p_next
             
-            if t % 5 == 0:
-                fig, ax = plt.subplots()
-                ax.imshow(p.T, cmap='RdGy', vmin=-0.2, vmax=0.2, origin='lower')
-                ax.contour(mask.T, colors='cyan', levels=[0.5])
+            if t % 8 == 0:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                ax.imshow(p.T, cmap='coolwarm', origin='lower', vmin=-0.3, vmax=0.3)
+                # Disegno muro in sovrapposizione
+                ax.contour(mask.T, colors='black', levels=[0.5], linewidths=2)
+                ax.set_title(f"Fronte d'onda con incidenza a {angle_inc}°")
                 ax.axis('off')
-                disp.pyplot(fig)
+                plot_cont.pyplot(fig)
                 plt.close(fig)
+
+        st.success("Simulazione conclusa. Si osservi come l'onda 'ruota' entrando nella mazzetta.")
