@@ -3,52 +3,64 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE DASHBOARD ---
-st.set_page_config(page_title="Simulatore Acustico Finestra", layout="wide")
+st.set_page_config(page_title="Simulatore Acustico UNI/TR 11175", layout="wide")
 st.title("🎛️ Simulatore Parametrico: Attenuazione dBA")
-st.markdown("Analisi dell'attenuazione sonora con inclusione della banda a 100 Hz.")
 
-# --- SIDEBAR: INPUT PARAMETRICI ---
-st.sidebar.header("1. Potenza Sonora Sorgente (Lw)")
-# Inserimento manuale per banda (inclusi i 100 Hz)
-lw_100 = st.sidebar.number_input("100 Hz [dB]", value=106)
-lw_125 = st.sidebar.number_input("125 Hz [dB]", value=105)
-lw_250 = st.sidebar.number_input("250 Hz [dB]", value=102)
-lw_500 = st.sidebar.number_input("500 Hz [dB]", value=100)
-lw_1000 = st.sidebar.number_input("1000 Hz [dB]", value=98)
-lw_2000 = st.sidebar.number_input("2000 Hz [dB]", value=95)
-lw_4000 = st.sidebar.number_input("4000 Hz [dB]", value=90)
+# --- AREA POTENZA SONORA (EQUALIZZATORE) ---
+st.subheader("1. Spettro di Potenza Sonora della Sorgente (Lw)")
+st.write("Regola i cursori per definire i dB per ciascuna banda d'ottava (70 - 110 dB).")
 
-# Aggiornamento vettori
-lw_octave = np.array([lw_100, lw_125, lw_250, lw_500, lw_1000, lw_2000, lw_4000])
+# Creazione di 7 colonne per gli slider (uno per ogni banda)
+cols_lw = st.columns(7)
+freq_labels = ["100 Hz", "125 Hz", "250 Hz", "500 Hz", "1000 Hz", "2000 Hz", "4000 Hz"]
+default_vals = [106, 105, 102, 100, 98, 95, 90]
+lw_inputs = []
+
+for i, col in enumerate(cols_lw):
+    with col:
+        # Nota: Streamlit non ha un parametro 'vertical' nativo per gli slider standard, 
+        # ma disporli in colonne strette crea l'effetto "mixer/equalizzatore".
+        val = st.slider(freq_labels[i], 70, 110, default_vals[i], key=f"lw_{i}")
+        lw_inputs.append(val)
+
+lw_octave = np.array(lw_inputs)
 freqs = np.array([100, 125, 250, 500, 1000, 2000, 4000])
-# Pesatura A aggiornata (100 Hz = -19.1 dB)
 wA = np.array([-19.1, -16.1, -8.6, -3.2, 0, 1.2, 1.0]) 
 
-st.sidebar.header("2. Ambiente Esterno")
-dist_s = st.sidebar.slider("Distanza Sorgente-Finestra [m]", 1, 100, 20)
+# --- SIDEBAR: ALTRI PARAMETRI ---
+st.sidebar.header("2. Fattore di Forma (UNI/TR 11175)")
+tipo_facciata = st.sidebar.selectbox(
+    "Geometria della Facciata",
+    ["Piana (Standard)", "Nicchia Profonda", "Presenza di Balcone", "Strada Canyon"]
+)
 alpha_f = st.sidebar.slider("Assorbimento Facciata [α]", 0.0, 1.0, 0.05)
 
 st.sidebar.header("3. Geometria e Interno")
 thick_s = st.sidebar.slider("Spessore Mazzetta [m]", 0.0, 0.5, 0.2)
+dist_s = st.sidebar.slider("Distanza Sorgente-Finestra [m]", 1, 100, 20)
 dist_int = st.sidebar.slider("Distanza Interna P' [m]", 0.5, 5.0, 2.0)
 rt60 = st.sidebar.slider("Tempo di Riverbero [s]", 0.2, 2.0, 0.5)
 
 # --- MOTORE DI CALCOLO ---
-def calculate_attenuation_dba(theta_deg):
+def get_shape_factor_db(tipo):
+    factors = {"Piana (Standard)": 0.0, "Nicchia Profonda": -2.0, "Presenza di Balcone": 2.5, "Strada Canyon": -3.0}
+    return factors[tipo]
+
+def calculate_physics(theta_deg):
     theta = np.radians(theta_deg)
     k = 2 * np.pi * freqs / 343
-    R = np.sqrt(1 - alpha_f)
-    area_W = 1.0
-    V_room = 50.0
+    R_coef = np.sqrt(1 - alpha_f)
+    area_W = 1.0 
+    V_room = 50.0 
     A_room = 0.161 * V_room / rt60
     
-    # --- ESTERNO (Punto P a 1m) ---
     lp_incidente = lw_octave - 20*np.log10(dist_s) - 11
     delta_p = 2 * 1.0 * np.cos(theta)
-    gain_refl = 10 * np.log10(1 + R**2 + 2*R*np.cos(k * delta_p) + 1e-10)
-    lp_ext = lp_incidente + gain_refl
+    gain_refl = 10 * np.log10(1 + R_coef**2 + 2*R_coef*np.cos(k * delta_p) + 1e-10)
     
-    # --- INTERNO (Punto P' a dist_int) ---
+    dl_fs = get_shape_factor_db(tipo_facciata)
+    lp_ext = lp_incidente + gain_refl - dl_fs 
+    
     psi = (k * np.sqrt(area_W) / 2) * (np.sin(0) - np.sin(theta))
     dir_factor = (np.sinc(psi / np.pi))**2
     
@@ -61,46 +73,46 @@ def calculate_attenuation_dba(theta_deg):
     
     lp_int = 10 * np.log10(i_dir + i_riv + 1e-10) + lp_incidente - att_thick
     
-    # --- SOMMA dBA ---
-    lp_ext_weighted = lp_ext + wA
-    lp_int_weighted = lp_int + wA
+    spec_ext_dba = lp_ext + wA
+    spec_int_dba = lp_int + wA
+    total_ext_dba = 10 * np.log10(np.sum(10**(spec_ext_dba/10)))
+    total_int_dba = 10 * np.log10(np.sum(10**(spec_int_dba/10)))
     
-    ext_dba = 10 * np.log10(np.sum(10**(lp_ext_weighted/10)))
-    int_dba = 10 * np.log10(np.sum(10**(lp_int_weighted/10)))
-    
-    return ext_dba - int_dba, ext_dba, int_dba, lp_ext_weighted, lp_int_weighted
+    return total_ext_dba - total_int_dba, total_ext_dba, total_int_dba, spec_ext_dba, spec_int_dba
 
 # --- VISUALIZZAZIONE ---
 angles = np.linspace(0, 85, 90)
-res_all = [calculate_attenuation_dba(a) for a in angles]
-att_vals = [r[0] for r in res_all]
+data = [calculate_physics(a) for a in angles]
+att_plot = [d[0] for d in data]
 
-col1, col2 = st.columns([2, 1])
+col_main, col_stats = st.columns([2, 1])
 
-with col1:
-    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8,8))
-    ax.plot(np.radians(angles), att_vals, color='#D62728', lw=2.5, label='Attenuazione dBA')
+with col_main:
+    st.subheader("Risposta Polare dell'Attenuazione")
+    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(7,7))
+    ax.plot(np.radians(angles), att_plot, color='#1c91ff', lw=3)
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.set_thetamin(0)
     ax.set_thetamax(90)
-    ax.legend(loc='lower right')
     st.pyplot(fig)
 
-with col2:
-    st.subheader("Analisi Spettrale (0°)")
-    att_0, ext_0, int_0, spec_ext, spec_int = calculate_attenuation_dba(0)
+with col_stats:
+    st.subheader("Valori a 0°")
+    att_0, ext_0, int_0, s_ext, s_int = calculate_physics(0)
+    st.metric("Esterno", f"{ext_0:.1f} dBA")
+    st.metric("Interno", f"{int_0:.1f} dBA")
+    st.metric("Delta dBA", f"{att_0:.1f} dB")
     
-    # Grafico a barre dello spettro dBA
-    fig_spec, ax_spec = plt.subplots()
-    x = np.arange(len(freqs))
-    ax_spec.bar(x - 0.2, spec_ext, 0.4, label='Esterno (P)', color='#1f77b4')
-    ax_spec.bar(x + 0.2, spec_int, 0.4, label='Interno (P\')', color='#ff7f0e')
-    ax_spec.set_xticks(x)
-    ax_spec.set_xticklabels([str(f) for f in freqs])
-    ax_spec.set_ylabel("Livello [dBA]")
-    ax_spec.legend()
-    st.pyplot(fig_spec)
-    
-    st.metric("Attenuazione Globale", f"{att_0:.1f} dB")
+    # Grafico spettro dBA
+    fig_bar, ax_bar = plt.subplots(figsize=(5,4))
+    ax_bar.bar(freq_labels, s_ext, alpha=0.5, label='P (Est)', color='gray')
+    ax_bar.bar(freq_labels, s_int, alpha=0.8, label="P' (Int)", color='#1c91ff')
+    ax_bar.set_ylabel("dB(A)")
+    ax_bar.legend()
+    st.pyplot(fig_bar)
+
+st.divider()
+st.info(f"Geometria: {tipo_facciata} | Spessore: {thick_s}m | Distanza Interna: {dist_int}m")
+
 
