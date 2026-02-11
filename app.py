@@ -2,112 +2,104 @@ import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Analisi Coerente UNI/TR 11175", layout="wide")
-st.title("🎛️ Scomposizione Fisica dell'Attenuazione (100Hz - 5000Hz)")
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(page_title="Wave Physics Lab: Aperture Diffraction", layout="wide")
 
-# --- AREA POTENZA SONORA (EQUALIZZATORE) ---
-st.subheader("1. Spettro di Potenza Sonora della Sorgente (Lw)")
-st.write("Regola i cursori per definire lo spettro della sorgente stradale.")
+tab1, tab2 = st.tabs(["🎯 Modello Analitico (Diffrazione)", "🌊 Simulatore Numerico (FDTD)"])
 
-freqs = np.array([100, 125, 250, 500, 1000, 2000, 4000, 5000])
-wA = np.array([-19.1, -16.1, -8.6, -3.2, 0, 1.2, 1.0, 0.5]) # Pesatura A incl. 5k
-default_lw = [106, 105, 102, 100, 98, 95, 90, 88]
-
-cols_lw = st.columns(len(freqs))
-lw_inputs = []
-
-for i, col in enumerate(cols_lw):
-    with col:
-        val = st.slider(f"{freqs[i]} Hz", 70, 110, default_lw[i], key=f"lw_{freqs[i]}")
-        lw_inputs.append(val)
-
-lw_octave = np.array(lw_inputs)
-
-# --- SIDEBAR: PARAMETRI FISICI ---
-st.sidebar.header("2. Parametri Geometrici")
-thick_s = st.sidebar.slider("Spessore Mazzetta (s) [m]", 0.0, 0.5, 0.2)
-dist_s = st.sidebar.slider("Distanza Sorgente [m]", 1, 100, 20)
-dist_int = st.sidebar.slider("Distanza Interna P' [m]", 0.5, 5.0, 2.0)
-rt60 = st.sidebar.slider("Tempo di Riverbero [s]", 0.2, 2.0, 0.5)
-
-st.sidebar.header("3. Fattore di Forma")
-tipo_facciata = st.sidebar.selectbox(
-    "Geometria Facciata", 
-    ["Piana (Standard)", "Nicchia Profonda", "Presenza di Balcone", "Strada Canyon"]
-)
-
-# --- MOTORE DI CALCOLO COERENTE ---
-def calculate_components(theta_deg):
-    theta = np.radians(theta_deg)
-    c = 343
-    k = 2 * np.pi * freqs / c
-    area_W = 1.0
-    V_room = 50.0
-    A_room = 0.161 * V_room / rt60
+# --- TAB 1: MODELLO ANALITICO FISICO ---
+with tab1:
+    st.title("Fisica della Diffrazione e Direttività")
     
-    # 1. LIVELLO ESTERNO (P)
-    lp_incidente = lw_octave - 20*np.log10(dist_s) - 11
-    # Guadagno facciata base + correzione UNI/TR 11175
-    shape_map = {"Piana (Standard)": 0, "Nicchia Profonda": -2, "Presenza di Balcone": 2.5, "Strada Canyon": -3}
-    lp_ext = lp_incidente + 3 - shape_map[tipo_facciata]
+    # Equalizzatore Potenza Sonora
+    st.subheader("1. Spettro Sorgente (Lw)")
+    freqs = np.array([100, 125, 250, 500, 1000, 2000, 4000, 5000])
+    wA = np.array([-19.1, -16.1, -8.6, -3.2, 0, 1.2, 1.0, 0.5]) 
+    default_lw = [106, 105, 102, 100, 98, 95, 90, 88]
     
-    # 2. CURVA ISO 12354 (Solo proiezione e riverbero)
-    i_iso = (4 * area_W * np.cos(theta)) / A_room
-    lp_int_iso = 10 * np.log10(i_iso + 1e-10) + lp_incidente
-    
-    # 3. CURVA DIFFRAZIONE (Mazzetta)
-    # Coerenza fisica: delta = s * (1 - cos(theta))
-    delta = thick_s * (1 - np.cos(theta))
-    N = 2 * delta * freqs / c
-    att_diff_freq = np.where(N > 0, 10 * np.log10(3 + 20*N), 0)
-    
-    # 4. MODELLO COMPLETO (Inclusa Direttività Sinc)
-    psi = (k * np.sqrt(area_W) / 2) * (np.sin(0) - np.sin(theta))
-    dir_factor = (np.sinc(psi / np.pi))**2
-    i_dir = (area_W * np.cos(theta) * dir_factor) / (2 * np.pi * dist_int**2)
-    
-    lp_int_tot = 10 * np.log10(i_dir + i_iso + 1e-10) + lp_incidente - att_diff_freq
-    
-    # Pesatura A e Totali
-    def to_dba(lp): return 10 * np.log10(np.sum(10**((lp + wA)/10)))
-    
-    val_ext = to_dba(lp_ext)
-    val_iso = val_ext - to_dba(lp_int_iso)
-    val_tot = val_ext - to_dba(lp_int_tot)
-    val_diff = val_tot - val_iso # Contributo puro della fisica mazzetta/diffrazione
-    
-    return val_iso, val_diff, val_tot
+    cols_lw = st.columns(len(freqs))
+    lw_inputs = [cols_lw[i].slider(f"{freqs[i]}Hz", 50, 110, default_lw[i]) for i in range(len(freqs))]
+    lw_octave = np.array(lw_inputs)
 
-# --- GRAFICA ---
-angles = np.linspace(0, 89, 90)
-res = np.array([calculate_components(a) for a in angles])
+    # Parametri Geometrici
+    st.sidebar.header("Parametri Fisici")
+    s = st.sidebar.slider("Spessore Mazzetta (s) [m]", 0.0, 0.6, 0.2)
+    w_width = st.sidebar.slider("Larghezza Apertura [m]", 0.5, 2.0, 1.0)
+    d_src = st.sidebar.slider("Distanza Sorgente [m]", 2, 50, 15)
+    d_mic = st.sidebar.slider("Distanza Ricevitore Interno [m]", 0.5, 5.0, 2.0)
 
-col_plot, col_table = st.columns([2, 1])
+    # Motore di Calcolo Fisico
+    def calculate_physics(theta_deg):
+        theta = np.radians(theta_deg)
+        k = 2 * np.pi * freqs / 343
+        
+        # 1. Propagazione Esterna (Campo Libero)
+        lp_incidente = lw_octave - 20*np.log10(d_src) - 11
+        
+        # 2. Diffrazione della Mazzetta (Maekawa)
+        delta = s * (1 - np.cos(theta))
+        N = 2 * delta * freqs / 343
+        att_diff = np.where(N > 0, 10 * np.log10(3 + 20*N), 0)
+        
+        # 3. Direttività dell'Apertura (Modello Sinc)
+        psi = (k * w_width / 2) * np.sin(theta)
+        dir_factor = (np.sinc(psi / np.pi))**2
+        
+        # 4. Livello Interno (Pressione puntuale)
+        # i_int proporzionale alla potenza incidente, direttività e divergenza interna
+        i_int = (np.cos(theta) * dir_factor) / (2 * np.pi * d_mic**2)
+        lp_int = 10 * np.log10(i_int + 1e-12) + lp_incidente - att_diff
+        
+        # Totali dBA
+        ext_dba = 10 * np.log10(np.sum(10**((lp_incidente + wA)/10)))
+        int_dba = 10 * np.log10(np.sum(10**((lp_int + wA)/10)))
+        return ext_dba - int_dba, att_diff.mean()
 
-with col_plot:
-    fig, ax = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(8,8))
-    ax.plot(np.radians(angles), res[:, 0], 'r--', label='ISO 12354 (Teorica)')
-    ax.plot(np.radians(angles), res[:, 1], 'g:', label='Delta Diffrazione (Mazzetta)')
-    ax.plot(np.radians(angles), res[:, 2], 'b-', lw=3, label='Attenuazione Totale')
+    # Plot Polare
+    angles = np.linspace(0, 89, 90)
+    results = np.array([calculate_physics(a) for a in angles])
     
-    ax.set_theta_zero_location("N")
-    ax.set_theta_direction(-1)
-    ax.set_thetamin(0)
-    ax.set_thetamax(90)
-    ax.legend(loc='lower right')
-    st.pyplot(fig)
+    fig_pol, ax_pol = plt.subplots(subplot_kw={'projection': 'polar'}, figsize=(7,7))
+    ax_pol.plot(np.radians(angles), results[:, 0], lw=3, label="Attenuazione Totale [dB]")
+    ax_pol.fill_between(np.radians(angles), 0, results[:, 1], color='g', alpha=0.2, label="Contributo Mazzetta")
+    ax_pol.set_theta_zero_location("N")
+    ax_pol.set_theta_direction(-1)
+    ax_pol.set_thetamin(0)
+    ax_pol.set_thetamax(90)
+    ax_pol.legend()
+    st.pyplot(fig_pol)
 
-with col_table:
-    st.subheader("Analisi Comparativa")
-    # Tabella rapida per tre angoli chiave
-    test_angles = [0, 45, 80]
-    for a in test_angles:
-        v_iso, v_diff, v_tot = calculate_components(a)
-        st.write(f"**Angolo {a}°**")
-        st.write(f"- ISO 12354: {v_iso:.1f} dB")
-        st.write(f"- Bonus Fisico: +{v_diff:.1f} dB")
-        st.write(f"- Totale Reale: {v_tot:.1f} dB")
-        st.write("---")
-
-st.info("💡 **Osservazione:** Nota come a 0° il 'Bonus Fisico' sia nullo, confermando la coerenza del modello con la teoria della diffrazione.")
+# --- TAB 2: SIMULATORE NUMERICO FDTD ---
+with tab2:
+    st.title("Simulatore Time-Domain (FDTD)")
+    st.write("Risoluzione numerica dell'equazione delle onde $\\nabla^2 p - \\frac{1}{c^2}\\frac{\\partial^2 p}{\\partial t^2} = 0$.")
+    
+    c_sim = st.button("🚀 Avvia Calcolo Numerico")
+    
+    if c_sim:
+        # Griglia e parametri
+        nx, ny = 100, 70
+        p, p_prev = np.zeros((nx, ny)), np.zeros((nx, ny))
+        mask = np.ones((nx, ny))
+        # Disegno muro
+        wall_x, thick_px, gap_px = 35, 6, 12
+        mask[wall_x : wall_x+thick_px, : ny//2 - gap_px//2] = 0
+        mask[wall_x : wall_x+thick_px, ny//2 + gap_px//2 :] = 0
+        
+        disp = st.empty()
+        for t in range(150):
+            # Sorgente pulsata
+            p[5, ny//2] += np.sin(0.5 * t) * np.exp(-0.01 * (t-40)**2)
+            
+            # Update FDTD
+            p_next = 2*p - p_prev + 0.25 * (np.roll(p,1,0)+np.roll(p,-1,0)+np.roll(p,1,1)+np.roll(p,-1,1)-4*p)
+            p_next *= mask # Parete rigida
+            p_prev, p = p, p_next
+            
+            if t % 5 == 0:
+                fig, ax = plt.subplots()
+                ax.imshow(p.T, cmap='RdGy', vmin=-0.2, vmax=0.2, origin='lower')
+                ax.contour(mask.T, colors='cyan', levels=[0.5])
+                ax.axis('off')
+                disp.pyplot(fig)
+                plt.close(fig)
